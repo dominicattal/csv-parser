@@ -37,9 +37,9 @@ double      csv_float(CSV* csv, int row, int col);
 char*       csv_string(CSV* csv, int row, int col);
 
 // Cell Queries
-CSVEnum     cell_type(Cell* cell);
-long long   cell_int(Cell* cell);
-double      cell_float(Cell* cell);
-char*       cell_string(Cell* cell);
+CSVEnum     csv_cell_type(Cell* cell);
+long long   csv_cell_int(Cell* cell);
+double      csv_cell_float(Cell* cell);
+char*       csv_cell_string(Cell* cell);
 
 #endif
