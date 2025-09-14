@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <string.h>
 
 #define csv_malloc(size)    malloc(size)
 #define csv_free(ptr)       free(ptr)
@@ -26,16 +27,18 @@ static void get_dimensions(FILE* fptr, int* num_rows, int* num_cols)
     *num_cols = nc;
 }
 
-// 0 = int, 1 = float, 2 = string
+// 0 = empty, 1 = int, 2 = float, 3 = string
 static int substr_type(int n, const char* s)
 {
-    int res = 0;
+    if (n == 0) 
+        return 0;
+    int res = 1;
     for (int i = 0; i < n; i++) {
         if (!isdigit(s[i])) {
             if (s[i] == '.')
-                res = 1;
+                res = 2;
             else
-                return 2;
+                return 3;
         }
     }
     return res;
@@ -68,10 +71,13 @@ static Cell read_next_cell(FILE* fptr)
 
     type = substr_type(len-1, substr);
     if (type == 0) {
+        cell.type = CSV_EMPTY;
+        csv_free(substr);
+    } else if (type == 1) {
         cell.type = CSV_INT;
         cell.val_int = atol(substr);
         csv_free(substr);
-    } else if (type == 1) {
+    } else if (type == 2) {
         cell.type = CSV_FLOAT;
         cell.val_float = atof(substr);
         csv_free(substr);
@@ -129,7 +135,9 @@ void csv_write(CSV* csv, const char* path)
     for (row = 0; row < csv->num_rows; row++) {
         for (col = 0; col < csv->num_cols; col++) {
             cell = *csv_cell(csv, row, col);
-            if (cell.type == CSV_INT)
+            if (cell.type == CSV_EMPTY)
+                ;
+            else if (cell.type == CSV_INT)
                 fprintf(fptr, "%lld", cell.val_int);
             else if (cell.type == CSV_FLOAT)
                 fprintf(fptr, "%f", cell.val_float);
@@ -152,6 +160,107 @@ void csv_destroy(CSV* csv)
     csv_free(csv);
 }
 
+CSVint* csv_column_int(CSV* csv, int col, int row_start, int row_end)
+{
+    CSVint* arr;
+    Cell cell;
+    int row;
+
+    if (row_start < 0 || row_end < 0)
+        return NULL;
+    if (row_start >= csv->num_rows || row_end >= csv->num_rows)
+        return NULL;
+    if (row_start > row_end)
+        return NULL;
+
+    arr = csv_malloc((row_end-row_start+1) * sizeof(CSVint));
+
+    for (row = row_start; row <= row_end; row++) {
+        cell = *csv_cell(csv, row, col);
+        if (cell.type != CSV_INT) {
+            csv_free(arr);
+            return NULL;
+        }
+        arr[row-row_start] = cell.val_int;
+    }
+
+    return arr;
+}
+
+CSVfloat* csv_column_float(CSV* csv, int col, int row_start, int row_end)
+{
+    CSVfloat* arr;
+    Cell cell;
+    int row;
+
+    if (row_start < 0 || row_end < 0)
+        return NULL;
+    if (row_start >= csv->num_rows || row_end >= csv->num_rows)
+        return NULL;
+    if (row_start > row_end)
+        return NULL;
+
+    arr = csv_malloc((row_end-row_start+1) * sizeof(CSVfloat));
+
+    for (row = row_start; row <= row_end; row++) {
+        cell = *csv_cell(csv, row, col);
+        if (cell.type == CSV_INT)
+            arr[row-row_start] = (CSVfloat)cell.val_int;
+        else if (cell.type == CSV_FLOAT)
+            arr[row-row_start] = cell.val_float;
+        else {
+            csv_free(arr);
+            return NULL;
+        }
+    }
+
+    return arr;
+}
+
+char** csv_column_string(CSV* csv, int col, int row_start, int row_end)
+{
+    char** arr;
+    Cell cell;
+    int row, n;
+    char buf[64];
+    char* string;
+
+    if (row_start < 0 || row_end < 0)
+        return NULL;
+    if (row_start >= csv->num_rows || row_end >= csv->num_rows)
+        return NULL;
+    if (row_start > row_end)
+        return NULL;
+
+    arr = csv_malloc((row_end-row_start+1) * sizeof(char*));
+
+    for (row = row_start; row <= row_end; row++) {
+        cell = *csv_cell(csv, row, col);
+        if (cell.type == CSV_EMPTY) {
+            arr[row-row_start] = "";
+        } else if (cell.type == CSV_INT) {
+            sprintf(buf, "%lld", cell.val_int);
+            n = strlen(buf);
+            string = csv_malloc((n+1) * sizeof(char));
+            strncpy(string, buf, n+1);
+            arr[row-row_start] = string;
+        } else if (cell.type == CSV_FLOAT) {
+            sprintf(buf, "%f", cell.val_float);
+            n = strlen(buf);
+            string = csv_malloc((n+1) * sizeof(char));
+            strncpy(string, buf, n+1);
+            arr[row-row_start] = string;
+        } else {
+            n = strlen(cell.val_string);
+            string = csv_malloc((n+1) * sizeof(char));
+            strncpy(string, cell.val_string, n+1);
+            arr[row-row_start] = string;
+        }
+    }
+
+    return arr;
+}
+
 int csv_num_rows(CSV* csv)
 {
     return csv->num_rows;
@@ -172,12 +281,12 @@ CSVEnum csv_type(CSV* csv, int row, int col)
     return csv->cells[row * csv->num_cols + col].type;
 }
 
-long long csv_int(CSV* csv, int row, int col)
+CSVint csv_int(CSV* csv, int row, int col)
 {
     return csv->cells[row * csv->num_cols + col].val_int;
 }
 
-double csv_float(CSV* csv, int row, int col)
+CSVfloat csv_float(CSV* csv, int row, int col)
 {
     return csv->cells[row * csv->num_cols + col].val_float;
 }
@@ -192,12 +301,12 @@ CSVEnum csv_cell_type(Cell* cell)
     return cell->type;
 }
 
-long long csv_cell_int(Cell* cell)
+CSVint csv_cell_int(Cell* cell)
 {
     return cell->val_int;
 }
 
-double csv_cell_float(Cell* cell)
+CSVfloat csv_cell_float(Cell* cell)
 {
     return cell->val_float;
 }
