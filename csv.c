@@ -68,6 +68,12 @@ static Cell read_next_cell(FILE* fptr)
     for (i = 0; i < len; i++)
         substr[i] = fgetc(fptr);
     substr[len-1] = '\0';
+    for (i = len-1; i >= 0; i--) {
+        if (substr[i] == '\r') {
+            substr[i] = '\0';
+            len--;
+        }
+    }
 
     type = substr_type(len-1, substr);
     if (type == 0) {
@@ -100,8 +106,10 @@ CSV* csv_read(const char* path)
     csv = NULL;
 
     fptr = fopen(path, "rb");
-    if (fptr == NULL)
+    if (fptr == NULL) {
+        csv_print("Could not open csv file for reading: %s", path);
         return NULL;
+    }
 
     get_dimensions(fptr, &num_rows, &num_cols);
 
@@ -129,8 +137,10 @@ void csv_write(CSV* csv, const char* path)
     int row, col;
 
     fptr = fopen(path, "w");
-    if (fptr == NULL)
+    if (fptr == NULL) {
+        csv_print("Could not open csv file for writing: %s", path);
         return;
+    }
 
     for (row = 0; row < csv->num_rows; row++) {
         for (col = 0; col < csv->num_cols; col++) {
@@ -160,24 +170,27 @@ void csv_destroy(CSV* csv)
     csv_free(csv);
 }
 
-CSVint* csv_column_int(CSV* csv, int col, int row_start, int row_end)
+CSVint* csv_column_int(CSV* csv, const char* col_name)
 {
     CSVint* arr;
     Cell cell;
-    int row;
+    int row, col;
+    int row_start, row_end;
 
-    if (row_start < 0 || row_end < 0)
+    col = csv_column_id(csv, col_name);
+    if (col == -1) {
+        csv_print("Could not find column %s to flatten to int arr", col_name);
         return NULL;
-    if (row_start >= csv->num_rows || row_end >= csv->num_rows)
-        return NULL;
-    if (row_start > row_end)
-        return NULL;
+    }
+    row_start = 1;
+    row_end = csv->num_rows - 1;
 
     arr = csv_malloc((row_end-row_start+1) * sizeof(CSVint));
 
     for (row = row_start; row <= row_end; row++) {
         cell = *csv_cell(csv, row, col);
         if (cell.type != CSV_INT) {
+            csv_print("Invalid cell type when flattening column %s to int array", col_name);
             csv_free(arr);
             return NULL;
         }
@@ -187,18 +200,20 @@ CSVint* csv_column_int(CSV* csv, int col, int row_start, int row_end)
     return arr;
 }
 
-CSVfloat* csv_column_float(CSV* csv, int col, int row_start, int row_end)
+CSVfloat* csv_column_float(CSV* csv, const char* col_name)
 {
     CSVfloat* arr;
     Cell cell;
-    int row;
+    int row, col;
+    int row_start, row_end;
 
-    if (row_start < 0 || row_end < 0)
+    col = csv_column_id(csv, col_name);
+    if (col == -1) {
+        csv_print("Could not find column %s to flatten to float arr", col_name);
         return NULL;
-    if (row_start >= csv->num_rows || row_end >= csv->num_rows)
-        return NULL;
-    if (row_start > row_end)
-        return NULL;
+    }
+    row_start = 1;
+    row_end = csv->num_rows - 1;
 
     arr = csv_malloc((row_end-row_start+1) * sizeof(CSVfloat));
 
@@ -209,6 +224,7 @@ CSVfloat* csv_column_float(CSV* csv, int col, int row_start, int row_end)
         else if (cell.type == CSV_FLOAT)
             arr[row-row_start] = cell.val_float;
         else {
+            csv_print("Invalid cell type when flattening column %s to float array", col_name);
             csv_free(arr);
             return NULL;
         }
@@ -217,20 +233,22 @@ CSVfloat* csv_column_float(CSV* csv, int col, int row_start, int row_end)
     return arr;
 }
 
-char** csv_column_string(CSV* csv, int col, int row_start, int row_end)
+char** csv_column_string(CSV* csv, const char* col_name)
 {
     char** arr;
     Cell cell;
-    int row, n;
+    int col, row, n;
     char buf[64];
     char* string;
+    int row_start, row_end;
 
-    if (row_start < 0 || row_end < 0)
+    col = csv_column_id(csv, col_name);
+    if (col == -1) {
+        csv_print("Could not find column %s to flatten to string arr", col_name);
         return NULL;
-    if (row_start >= csv->num_rows || row_end >= csv->num_rows)
-        return NULL;
-    if (row_start > row_end)
-        return NULL;
+    }
+    row_start = 1;
+    row_end = csv->num_rows - 1;
 
     arr = csv_malloc((row_end-row_start+1) * sizeof(char*));
 
@@ -261,6 +279,131 @@ char** csv_column_string(CSV* csv, int col, int row_start, int row_end)
     return arr;
 }
 
+void csv_encode(CSV* csv, const char* col_name)
+{
+    Cell* cell;
+    Trie* trie;
+    char* tmp;
+    int row, col;
+    int row_start, row_end;
+
+    col = csv_column_id(csv, col_name);
+    if (col == -1) {
+        csv_print("Could not find column %s to encode", col_name);
+        return;
+    }
+    row_start = 1;
+    row_end = csv->num_rows - 1;
+
+    trie = trie_create();
+    for (row = row_start; row <= row_end; row++) {
+        cell = csv_cell(csv, row, col);
+        if (cell->type != CSV_STRING) {
+            csv_print("Could not encode %s cell at (%d %d)", csv_cell_type_str(cell), row, col);
+            continue;
+        }
+        tmp = cell->val_string;
+        if (!trie_contains(trie, tmp))
+            trie_insert(trie, tmp);
+        cell->val_int = trie_key_id(trie, tmp);
+        cell->type = CSV_INT;
+        csv_free(tmp);
+    }
+    trie_destroy(trie);
+}
+
+void csv_one_hot_encode(CSV* csv, const char* col_name)
+{
+    Trie* trie;
+    Cell* new_cells;
+    Cell* cell;
+    char* string;
+    char* string_copy;
+    int i, j, n;
+    int row, col, new_num_cols;
+    int row_start, row_end;
+    int new_idx, id, len;
+
+    col = csv_column_id(csv, col_name);
+    if (col == -1) {
+        csv_print("Could not find column %s to one-hot encode", col_name);
+        return;
+    }
+    row_start = 1;
+    row_end = csv->num_rows - 1;
+
+    trie = trie_create();
+
+    for (row = row_start; row <= row_end; row++) {
+        cell = csv_cell(csv, row, col);
+        if (cell->type != CSV_STRING) {
+            csv_print("Could not one-hot encode %s cell at (%d %d)", csv_cell_type_str(cell), row, col);
+            continue;
+        }
+        if (!trie_contains(trie, cell->val_string))
+            trie_insert(trie, cell->val_string);
+    }
+    
+    n = trie_num_unique_keys(trie);
+    new_num_cols = csv->num_cols + n - 1;
+    new_cells = csv_malloc(csv->num_rows * new_num_cols * sizeof(Cell));
+
+    for (i = 0; i < csv->num_rows * new_num_cols; i++) {
+        new_cells[i] = (Cell) {
+            .type = CSV_INT,
+            .val_int = 0
+        };
+    }
+
+    for (i = 0, j = 0; i < csv->num_cols; i++) {
+        if (i == col) 
+            continue;
+        new_cells[j] = csv->cells[i];
+        j++;
+    }
+
+    for (i = 0; i < n; i++) {
+        string = trie_id_key(trie, i);
+        len = strlen(string);
+        string_copy = csv_malloc((len+1) * sizeof(char));
+        strncpy(string_copy, string, len+1);
+        new_cells[csv->num_cols+i-1] = (Cell) {
+            .type = CSV_STRING,
+            .val_string = string_copy
+        };
+    }
+
+    for (row = 1; row < csv->num_rows; row++) {
+        j = 0;
+        for (i = 0; i < csv->num_cols; i++) {
+            cell = csv_cell(csv, row, i);
+            if (i == col) {
+                if (cell->type != CSV_STRING)
+                    continue;
+                if (!trie_contains(trie, cell->val_string))
+                    continue;
+                id = trie_key_id(trie, cell->val_string);
+                new_idx = row * new_num_cols + csv->num_cols + id - 1;
+                new_cells[new_idx] = (Cell) {
+                    .type = CSV_INT,
+                    .val_int = 1
+                };
+                csv_free(cell->val_string);
+            } else {
+                new_idx = row * new_num_cols + j;
+                new_cells[new_idx] = *cell;
+                j++;
+            }
+        }
+    }
+
+    csv_free(csv->cells);
+    csv->cells = new_cells;
+    csv->num_cols = new_num_cols;
+
+    trie_destroy(trie);
+}
+
 int csv_num_rows(CSV* csv)
 {
     return csv->num_rows;
@@ -269,6 +412,25 @@ int csv_num_rows(CSV* csv)
 int csv_num_cols(CSV* csv)
 {
     return csv->num_cols;
+}
+
+const char* csv_column_name(CSV* csv, int col)
+{
+    return csv_string(csv, 0, col);
+}
+
+int csv_column_id(CSV* csv, const char* col_name)
+{
+    Cell* cell;
+    for (int i = 0; i < csv->num_rows; i++) {
+        cell = csv_cell(csv, 0, i);
+        if (cell->type != CSV_STRING)
+            continue;
+        if (strcmp(cell->val_string, col_name) != 0)
+            continue;
+        return i;
+    }
+    return -1;
 }
 
 Cell* csv_cell(CSV* csv, int row, int col)
@@ -291,9 +453,24 @@ CSVfloat csv_float(CSV* csv, int row, int col)
     return csv->cells[row * csv->num_cols + col].val_float;
 }
 
-char* csv_string(CSV* csv, int row, int col)
+const char* csv_string(CSV* csv, int row, int col)
 {
     return csv->cells[row * csv->num_cols + col].val_string;
+}
+
+const char* csv_cell_type_str(Cell* cell)
+{
+    switch (cell->type) {
+        case CSV_EMPTY:
+            return "empty";
+        case CSV_INT:
+            return "int";
+        case CSV_FLOAT:
+            return "float";
+        case CSV_STRING:
+            return "string";
+    }
+    return "error";
 }
 
 CSVEnum csv_cell_type(Cell* cell)
@@ -311,7 +488,7 @@ CSVfloat csv_cell_float(Cell* cell)
     return cell->val_float;
 }
 
-char* csv_cell_string(Cell* cell)
+const char* csv_cell_string(Cell* cell)
 {
     return cell->val_string;
 }

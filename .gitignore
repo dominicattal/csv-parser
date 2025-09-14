@@ -2,5 +2,6 @@ Makefile
 test.c
 test.csv
 test_out.csv
+test-1.csv
 a.exe
 bug.txt
