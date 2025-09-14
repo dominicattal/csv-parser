@@ -88,10 +88,8 @@ CSV* csv_read(const char* path)
     FILE* fptr;
     CSV* csv;
     Cell* cells;
-    Cell cell;
     int num_rows, num_cols;
     int row, col;
-    char c;
 
     csv = NULL;
 
